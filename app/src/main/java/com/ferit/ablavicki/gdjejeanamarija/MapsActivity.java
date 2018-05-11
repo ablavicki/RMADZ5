@@ -9,7 +9,10 @@ import android.graphics.Bitmap;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
+import android.media.AudioManager;
+import android.media.SoundPool;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 import android.os.PersistableBundle;
 import android.provider.MediaStore;
@@ -34,6 +37,7 @@ import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.CameraPosition;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MarkerOptions;
@@ -45,13 +49,14 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 
 import static android.widget.Toast.LENGTH_SHORT;
 
 
-public class MapsActivity extends AppCompatActivity implements OnMapReadyCallback {
+public class MapsActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMapClickListener {
 
 
     private GoogleMap mMap;
@@ -61,6 +66,9 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     private Location mLastKnownLocation;
     private CameraPosition mCameraPosition;
     String mCurrentPhotoPath;
+    SoundPool mSoundPool;
+    HashMap<Integer, Integer> mSoundMap = new HashMap<>();
+
 
 
     private static final String KEY_CAMERA_POSITION = "camera_position";
@@ -71,6 +79,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     private static final int DEFAULT_ZOOM = 17;
     private final LatLng mDefaultLocation = new LatLng(45.55111, 18.69389);
     private static final int REQUEST_IMAGE_CAPTURE = 1;
+    boolean mLoaded = false;
 
 
     @Override
@@ -89,17 +98,18 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         mapFragment.getMapAsync(this);
 
         //provides access to Google's database of local place and business information
-        mGeoDataClient = Places.getGeoDataClient(this,null);
+        mGeoDataClient = Places.getGeoDataClient(this, null);
 
         //provides quick access to the device's current place
         mPlaceDetectionClient = Places.getPlaceDetectionClient(this, null);
         mLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
 
+        loadSounds();
 
     }
 
     //checks if the user granted fine location permission and if not requests the permission
-    private void getLocationPermission(){
+    private void getLocationPermission() {
         if (ContextCompat.checkSelfPermission(this.getApplicationContext(),
                 android.Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
@@ -117,6 +127,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             outState.putParcelable(KEY_CAMERA_POSITION, mMap.getCameraPosition());
             outState.putParcelable(KEY_LOCATION, mLastKnownLocation);
             super.onSaveInstanceState(outState);
+
         }
     }
 
@@ -151,7 +162,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                 mLastKnownLocation = null;
                 getLocationPermission();
             }
-        } catch (SecurityException e)  {
+        } catch (SecurityException e) {
             Log.e("Exception: %s", e.getMessage());
         }
     }
@@ -169,11 +180,46 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
 
+        mMap.setOnMapClickListener(this);
+
         getLocationPermission();
         updateLocationUI();
         getDeviceLocation();
 
     }
+
+    @Override
+    public void onMapClick(LatLng latLng) {
+
+        // Creating a marker
+        MarkerOptions markerOptions = new MarkerOptions();
+
+        // Setting the position for the marker
+        markerOptions.position(latLng);
+        markerOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE));
+        Location location = new Location("test");
+        location.setLatitude(latLng.latitude);
+        location.setLongitude(latLng.longitude);
+        location.setTime(new Date().getTime()); //Set time as current Date
+        // Setting the title for the marker.
+        // This will be displayed on taping the marker
+        try {
+            markerOptions.title(titleSetup(location));
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        // Animating to the touched position
+        mMap.animateCamera(CameraUpdateFactory.newLatLng(latLng));
+
+        // Placing a marker on the touched position
+        mMap.addMarker(markerOptions);
+
+        if(mLoaded == false) return;
+        else
+            playSound(R.raw.boing);
+    }
+
 
     private void getDeviceLocation() {
         try {
@@ -182,13 +228,17 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                 locationResult.addOnCompleteListener(this, new OnCompleteListener<Location>() {
                     @Override
                     public void onComplete(@NonNull Task<Location> task) {
-                        if (task.isSuccessful()&& task.getResult() != null) {
+                        if (task.isSuccessful() && task.getResult() != null) {
                             // Set the map's camera position to the current location of the device.
                             mLastKnownLocation = task.getResult();
                             mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(
                                     new LatLng(mLastKnownLocation.getLatitude(),
                                             mLastKnownLocation.getLongitude()), DEFAULT_ZOOM));
-                            drawMarker(mLastKnownLocation);
+                            try {
+                                drawMarker(mLastKnownLocation);
+                            } catch (IOException e) {
+                                e.printStackTrace();
+                            }
                         } else {
                             Log.d(TAG, "Current location is null. Using defaults.");
                             Log.e(TAG, "Exception: %s", task.getException());
@@ -199,101 +249,131 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                     }
                 });
             }
-        } catch (SecurityException e)  {
+        } catch (SecurityException e) {
             Log.e("Exception: %s", e.getMessage());
         }
     }
 
-    private void drawMarker(Location location) {
+    private void drawMarker(Location location) throws IOException {
         if (mMap != null) {
             mMap.clear();
             LatLng gps = new LatLng(location.getLatitude(), location.getLongitude());
-            String string = String.valueOf(location.getLatitude());
             mMap.addMarker(new MarkerOptions()
                     .position(gps)
-                    .title(string));
+                    .title(titleSetup(location)));
             mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(gps, 12));
         }
 
     }
 
-    private String titleSetup(Location location) {
-        Geocoder geocoder = new Geocoder(this, Locale.getDefault());
-        String title = null;
-        try {
-            List<Address> address = geocoder.getFromLocation(location.getLatitude(), location.getLongitude(), 1);
-            String add = address.get(0).getAddressLine(0);
-            String city = address.get(0).getLocality();
-            String country = address.get(0).getCountryName();
-            title = add + "-" + city + "-" + country;
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-        return title;
-    }
+    private String titleSetup(Location location) throws IOException {
 
-    //menu setup
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        getMenuInflater().inflate(R.menu.options_menu, menu);
-        return true;
-    }
+        String message =
+                "Lat: " + location.getLatitude() + "\nLon:" + location.getLongitude() + "\n";
 
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item){
-        switch (item.getItemId()){
-            case R.id.details:
-                return true;
-            case R.id.picture:
-                takePicture();
-                galleryAddPic();
-                return true;
-            default: return super.onOptionsItemSelected(item);
-        }
-    }
-
-    private void takePicture(){
-        Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-        if(takePictureIntent.resolveActivity(getPackageManager()) != null){
-            File photoFile = null;
+        if (Geocoder.isPresent()) {
+            Geocoder geocoder = new Geocoder(this, Locale.getDefault());
             try {
-                photoFile = createImageFile();
-            }
-            catch (IOException ex){
-                Toast.makeText(this, "Error while creating the file", LENGTH_SHORT).show();
-            }
-            if(photoFile != null){
-                Uri photoUri = FileProvider.getUriForFile(this,
-                        "com.ferit.ablavicki.gdjejeanamarija", photoFile);
-                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoUri);
-                startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
+                List<Address> nearByAddresses = geocoder.getFromLocation(
+                        location.getLatitude(), location.getLongitude(), 1);
+                if (nearByAddresses.size() > 0) {
+                    StringBuilder stringBuilder = new StringBuilder();
+                    Address nearestAddress = nearByAddresses.get(0);
+                    stringBuilder.append(nearestAddress.getAddressLine(0)).append("\n")
+                            .append(nearestAddress.getLocality()).append("\n")
+                            .append(nearestAddress.getCountryName());
+
+                    message = stringBuilder.toString();
+
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+
+
             }
         }
+        return message;
     }
 
+        //menu setup
+        @Override
+        public boolean onCreateOptionsMenu (Menu menu){
+            getMenuInflater().inflate(R.menu.options_menu, menu);
+            return true;
+        }
 
-    private File createImageFile() throws IOException{
-        String timeStamp = new SimpleDateFormat("yyyMMdd_HHmmss").format(new Date());
-        String imageFileName = "JPEG_" + timeStamp + "_";
-        File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-        File image = File.createTempFile(
-                imageFileName,
-                ".jpg",
-                storageDir
-        );
-        galleryAddPic();
+        @Override
+        public boolean onOptionsItemSelected (MenuItem item){
+            switch (item.getItemId()) {
+                case R.id.picture:
+                    takePicture();
+                    galleryAddPic();
+                    return true;
+                default:
+                    return super.onOptionsItemSelected(item);
+            }
+        }
 
-        mCurrentPhotoPath = image.getAbsolutePath();
+        private void takePicture () {
+            Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
+                File photoFile = null;
+                try {
+                    photoFile = createImageFile();
+                } catch (IOException ex) {
+                    Toast.makeText(this, "Error while creating the file", LENGTH_SHORT).show();
+                }
+                if (photoFile != null) {
+                    Uri photoUri = FileProvider.getUriForFile(this,
+                            "com.ferit.ablavicki.gdjejeanamarija", photoFile);
+                    takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoUri);
+                    startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
+                }
+            }
+        }
 
-        return image;
+
+        private File createImageFile () throws IOException {
+            String timeStamp = new SimpleDateFormat("yyyMMdd_HHmmss").format(new Date());
+            String imageFileName = "JPEG_" + timeStamp + "_";
+            File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            File image = File.createTempFile(
+                    imageFileName,
+                    ".jpg",
+                    storageDir
+            );
+            galleryAddPic();
+
+            mCurrentPhotoPath = image.getAbsolutePath();
+
+            return image;
+        }
+
+        private void galleryAddPic() {
+            Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+            File f = new File(mCurrentPhotoPath);
+            Uri contentUri = Uri.fromFile(f);
+            mediaScanIntent.setData(contentUri);
+            this.sendBroadcast(mediaScanIntent);
+        }
+
+        private void loadSounds(){
+
+        this.mSoundPool = new SoundPool(10, AudioManager.STREAM_MUSIC,0);
+        this.mSoundPool.setOnLoadCompleteListener(new SoundPool.OnLoadCompleteListener() {
+            @Override
+            public void onLoadComplete(SoundPool soundPool, int sampleId, int status) {
+                Log.d("Test",String.valueOf(sampleId));
+                mLoaded = true; }
+        });
+        this.mSoundMap.put(R.raw.boing, this.mSoundPool.load(this, R.raw.boing,1));
+
+        }
+
+        void playSound(int selectedSound){
+        int soundID = this.mSoundMap.get(selectedSound);
+        this.mSoundPool.play(soundID, 1, 1, 1, 0, 1f);
+        }
+
     }
 
-    private void galleryAddPic() {
-        Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-        File f = new File(mCurrentPhotoPath);
-        Uri contentUri = Uri.fromFile(f);
-        mediaScanIntent.setData(contentUri);
-        this.sendBroadcast(mediaScanIntent);
-    }
-
-}
