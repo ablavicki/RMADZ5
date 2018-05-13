@@ -1,15 +1,22 @@
 package com.ferit.ablavicki.gdjejeanamarija;
 
 import android.Manifest;
+import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
 import android.media.AudioManager;
+import android.media.RingtoneManager;
 import android.media.SoundPool;
 import android.net.Uri;
 import android.os.Build;
@@ -20,12 +27,14 @@ import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.FragmentActivity;
 import android.os.Bundle;
+import android.support.v4.app.NotificationCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.content.FileProvider;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.Toast;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
@@ -45,8 +54,10 @@ import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.Task;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
@@ -59,6 +70,9 @@ import static android.widget.Toast.LENGTH_SHORT;
 public class MapsActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMapClickListener {
 
 
+    public static final int CAMERA_REQUEST_CODE = 123;
+    public static final int CAMERA_PERMISSION_REQUEST_CODE = 321;
+    private static final int IMAGE_GALLERY_REQUEST = 20;
     private GoogleMap mMap;
     private GeoDataClient mGeoDataClient;
     private PlaceDetectionClient mPlaceDetectionClient;
@@ -70,9 +84,9 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     HashMap<Integer, Integer> mSoundMap = new HashMap<>();
 
 
-
     private static final String KEY_CAMERA_POSITION = "camera_position";
     private static final String KEY_LOCATION = "location";
+    public static final String MSG_KEY = "message";
     private boolean mLocationPermissionGranted;
     private static final int PERMISSIONS_REQUEST_ACCESS_FINE_LOCATION = 1;
     private static final String TAG = MapsActivity.class.getSimpleName();
@@ -85,7 +99,6 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         if (savedInstanceState != null) {
             mLastKnownLocation = savedInstanceState.getParcelable(KEY_LOCATION);
             mCameraPosition = savedInstanceState.getParcelable(KEY_CAMERA_POSITION);
@@ -127,7 +140,6 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             outState.putParcelable(KEY_CAMERA_POSITION, mMap.getCameraPosition());
             outState.putParcelable(KEY_LOCATION, mLastKnownLocation);
             super.onSaveInstanceState(outState);
-
         }
     }
 
@@ -145,13 +157,18 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             }
         }
         updateLocationUI();
+
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            if (grantResults[0] == PackageManager.PERMISSION_GRANTED && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
+                invokeCamera();
+            } else {
+                Toast.makeText(this, R.string.cannotOpenCamera, Toast.LENGTH_LONG).show();
+            }
+        }
     }
 
-
     private void updateLocationUI() {
-        if (mMap == null) {
-            return;
-        }
+        if (mMap == null) return;
         try {
             if (mLocationPermissionGranted) {
                 mMap.setMyLocationEnabled(true);
@@ -167,59 +184,40 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
         }
     }
 
-    /**
-     * Manipulates the map once available.
-     * This callback is triggered when the map is ready to be used.
-     * This is where we can add markers or lines, add listeners or move the camera. In this case,
-     * we just add a marker near Sydney, Australia.
-     * If Google Play services is not installed on the device, the user will be prompted to install
-     * it inside the SupportMapFragment. This method will only be triggered once the user has
-     * installed Google Play services and returned to the app.
-     */
+    //manipulates the map once it's ready
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
 
         mMap.setOnMapClickListener(this);
-
         getLocationPermission();
         updateLocationUI();
         getDeviceLocation();
-
     }
 
     @Override
     public void onMapClick(LatLng latLng) {
-
-        // Creating a marker
         MarkerOptions markerOptions = new MarkerOptions();
 
-        // Setting the position for the marker
         markerOptions.position(latLng);
         markerOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE));
         Location location = new Location("test");
         location.setLatitude(latLng.latitude);
         location.setLongitude(latLng.longitude);
-        location.setTime(new Date().getTime()); //Set time as current Date
-        // Setting the title for the marker.
-        // This will be displayed on taping the marker
+        location.setTime(new Date().getTime());
         try {
             markerOptions.title(titleSetup(location));
         } catch (IOException e) {
             e.printStackTrace();
         }
-
         // Animating to the touched position
         mMap.animateCamera(CameraUpdateFactory.newLatLng(latLng));
-
         // Placing a marker on the touched position
         mMap.addMarker(markerOptions);
-
-        if(mLoaded == false) return;
+        if (mLoaded == false) return;
         else
             playSound(R.raw.boing);
     }
-
 
     private void getDeviceLocation() {
         try {
@@ -263,14 +261,11 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                     .title(titleSetup(location)));
             mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(gps, 12));
         }
-
     }
 
     private String titleSetup(Location location) throws IOException {
-
         String message =
                 "Lat: " + location.getLatitude() + "\nLon:" + location.getLongitude() + "\n";
-
         if (Geocoder.isPresent()) {
             Geocoder geocoder = new Geocoder(this, Locale.getDefault());
             try {
@@ -282,98 +277,121 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
                     stringBuilder.append(nearestAddress.getAddressLine(0)).append("\n")
                             .append(nearestAddress.getLocality()).append("\n")
                             .append(nearestAddress.getCountryName());
-
                     message = stringBuilder.toString();
-
                 }
             } catch (IOException e) {
                 e.printStackTrace();
-
-
             }
         }
         return message;
     }
 
-        //menu setup
-        @Override
-        public boolean onCreateOptionsMenu (Menu menu){
-            getMenuInflater().inflate(R.menu.options_menu, menu);
-            return true;
-        }
+    //menu setup
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.options_menu, menu);
+        return true;
+    }
 
-        @Override
-        public boolean onOptionsItemSelected (MenuItem item){
-            switch (item.getItemId()) {
-                case R.id.picture:
-                    takePicture();
-                    galleryAddPic();
-                    return true;
-                default:
-                    return super.onOptionsItemSelected(item);
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.picture:
+                takePhoto();
+                //takePicture();
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
+    }
+
+    public void takePhoto(){
+        if ( checkSelfPermission(Manifest.permission.CAMERA)== PackageManager.PERMISSION_GRANTED &&
+                checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED){
+            invokeCamera();
+        }
+        else {
+            String[] permissionRequest = {Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE};
+            requestPermissions(permissionRequest, CAMERA_PERMISSION_REQUEST_CODE);
+        }
+    }
+    
+    private void invokeCamera(){
+        //get a file name
+        File file = createImageFile();
+        Uri pictureUri = FileProvider.getUriForFile(this, "com.ferit.ablavicki.gdjejeanamarija.fileprovider", file);
+
+        Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+
+        //where to save images
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, pictureUri);
+
+        //request WRITE permission
+        intent.setFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+        startActivityForResult(intent, CAMERA_REQUEST_CODE);
+    }
+
+    private File createImageFile() {
+        //the public picture directory
+        File picturesDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        String timestamp = sdf.format(new Date());
+        File imageFile = new File(picturesDirectory, "picture" + timestamp + ".jpg");
+        return imageFile;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (resultCode == RESULT_OK) {
+            if (requestCode == CAMERA_REQUEST_CODE) {
+                Toast.makeText(this, "Image Saved.", Toast.LENGTH_LONG).show();
+                sendNotification();
             }
         }
+    }
 
-        private void takePicture () {
-            Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-            if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
-                File photoFile = null;
-                try {
-                    photoFile = createImageFile();
-                } catch (IOException ex) {
-                    Toast.makeText(this, "Error while creating the file", LENGTH_SHORT).show();
-                }
-                if (photoFile != null) {
-                    Uri photoUri = FileProvider.getUriForFile(this,
-                            "com.ferit.ablavicki.gdjejeanamarija", photoFile);
-                    takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoUri);
-                    startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
-                }
-            }
-        }
+    private void sendNotification() {
+        String message = createImageFile().getName();
+        Intent notificationIntent = new Intent(this, MapsActivity.class);
+        notificationIntent.putExtra(MSG_KEY, message);
+        PendingIntent notificationPendingIntent = PendingIntent.getActivity(
+                this,0,notificationIntent,PendingIntent.FLAG_UPDATE_CURRENT
+        );
+        NotificationCompat.Builder notificationBuilder = new NotificationCompat.Builder(this);
+        notificationBuilder.setAutoCancel(true)
+                .setContentTitle("Image saved")
+                .setContentText(message)
+                .setSmallIcon(android.R.drawable.ic_dialog_email)
+                .setContentIntent(notificationPendingIntent)
+                .setLights(Color.BLUE, 2000, 1000)
+                .setVibrate(new long[]{1000,1000,1000,1000,1000})
+                .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
+        Notification notification = notificationBuilder.build();
 
+        NotificationManager notificationManager =
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        notificationManager.notify(0, notification);
 
-        private File createImageFile () throws IOException {
-            String timeStamp = new SimpleDateFormat("yyyMMdd_HHmmss").format(new Date());
-            String imageFileName = "JPEG_" + timeStamp + "_";
-            File storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-            File image = File.createTempFile(
-                    imageFileName,
-                    ".jpg",
-                    storageDir
-            );
-            galleryAddPic();
+        this.finish();
+    }
 
-            mCurrentPhotoPath = image.getAbsolutePath();
-
-            return image;
-        }
-
-        private void galleryAddPic() {
-            Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-            File f = new File(mCurrentPhotoPath);
-            Uri contentUri = Uri.fromFile(f);
-            mediaScanIntent.setData(contentUri);
-            this.sendBroadcast(mediaScanIntent);
-        }
-
-        private void loadSounds(){
-
-        this.mSoundPool = new SoundPool(10, AudioManager.STREAM_MUSIC,0);
+    //marker sound setup
+    private void loadSounds() {
+        this.mSoundPool = new SoundPool(10, AudioManager.STREAM_MUSIC, 0);
         this.mSoundPool.setOnLoadCompleteListener(new SoundPool.OnLoadCompleteListener() {
             @Override
             public void onLoadComplete(SoundPool soundPool, int sampleId, int status) {
-                Log.d("Test",String.valueOf(sampleId));
-                mLoaded = true; }
+                Log.d("Test", String.valueOf(sampleId));
+                mLoaded = true;
+            }
         });
-        this.mSoundMap.put(R.raw.boing, this.mSoundPool.load(this, R.raw.boing,1));
+        this.mSoundMap.put(R.raw.boing, this.mSoundPool.load(this, R.raw.boing, 1));
+    }
 
-        }
-
-        void playSound(int selectedSound){
+    void playSound(int selectedSound) {
         int soundID = this.mSoundMap.get(selectedSound);
         this.mSoundPool.play(soundID, 1, 1, 1, 0, 1f);
-        }
-
     }
+}
 
