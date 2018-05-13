@@ -315,7 +315,7 @@ public class MapsActivity extends AppCompatActivity implements OnMapReadyCallbac
             requestPermissions(permissionRequest, CAMERA_PERMISSION_REQUEST_CODE);
         }
     }
-    
+
     private void invokeCamera(){
         //get a file name
         File file = createImageFile();
